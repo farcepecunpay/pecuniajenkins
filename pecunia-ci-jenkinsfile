@@ -1,0 +1,104 @@
+pipeline {
+	agent any		
+
+	options {
+		// Para que solo salgan los logs de los ultimos 5 builds en jenkins.
+		buildDiscarder(logRotator(numToKeepStr:'5'))
+		// Tiempo maximo para terminar la ejecucion
+        timeout(time: 15, unit: 'MINUTES')
+        // El checkout se hara por codigo.
+        skipDefaultCheckout(true) 
+        // Evitar el mismo acceso a los mismos recursos     
+        disableConcurrentBuilds()   
+ 	 }
+	 
+ 	 // Instala herramientas predefinidas para que estén disponibles en el PATH.
+	 tools {
+		maven "mvn_3.8.4"
+ 	}
+ 	
+ 	// Declaracion de variables globales del proyecto
+ 	environment {
+ 		// Se pueden definir credenciales.
+ 		GIT_CREDENTIALS_ID = 'id_git_farce_ext_user_password'
+ 		SONNAR_CREDENTIALS_ID = 'credentialSonarId'
+		BRANCH = "to-sql"
+		// GIT_URL = 'https://github.com/farcepecunpay/matercardsend'
+		GIT_URL = 'https://git1-dvl.p.pecunpay.es/lab/kafka-poc2.git'
+		//GIT_URL = 'https://git1-dvl.p.pecunpay.es/pecunpay-autorizador/tests/autorizador-visa-tests.git'
+		SCANNER_HOME = tool 'SonarQubeScanner'
+ 	}
+ 	
+    parameters {
+        // gitParameter branchFilter: 'origin/(.*)', defaultValue: 'master', name: 'BRANCH', type: 'PT_BRANCH', useRepository: 'https://git1-dvl.p.pecunpay.es/lab/kafka-poc2'
+        //git branch: "${params.branchName}", credentialsId: "$GIT_CREDENTIALS_ID", url: 'https://git1-dvl.p.pecunpay.es/lab/kafka-poc2'
+        string(
+			defaultValue: 'https://git1-dvl.p.pecunpay.es/lab/kafka-poc2.git',
+			name: 'REPOSITORY',
+			trim: true
+		)
+		gitParameter branchFilter: 'origin.*/(.*)', defaultValue: 'to-sql', name: 'BRANCH', type: 'PT_BRANCH', useRepository: '.*kafka-poc2.git'
+    } 
+ 
+ 	stages {
+		stage('Checkout Git repository') {
+            steps {
+                // Descarga de la rama, con el identificador de credenciales.
+                // git branch:"${BRANCH}", credentialsId: "$GIT_CREDENTIALS_ID", url: "$GIT_URL"
+                echo "RAMA: ${params.BRANCH} REPOSITORY: ${params.REPOSITORY}"
+                git branch:"${params.BRANCH}", credentialsId: "$GIT_CREDENTIALS_ID", url: "${params.REPOSITORY}"
+                
+                updateGitlabCommitStatus name: 'test', state: 'pending'
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh 'mvn clean install -DskipTests'
+            }
+            // post {
+            //    success {
+            //        junit 'target/surefire-reports/**/*.xml' 
+            //    }
+            // }
+        }
+					
+		stage('SonarQube analysis') {
+		    environment {
+		        def SCANNER_HOME = tool 'SonarQubeScanner'
+		    }
+		    steps {
+		        println "SCANNER_HOME: " + "${SCANNER_HOME}"
+		         println "Sonar Url: " + "${env.SONAR_HOST_URL}"
+		         withSonarQubeEnv(credentialsId: 'id_sonar_token_pecunpay', installationName: 'sonarq-server-pecunpay') {
+                    sh '''$SCANNER_HOME/bin/sonar-scanner \
+                    -Dsonar.projectKey=kafka-poc2  \
+                    -Dsonar.projectName=kafka-poc2  \
+                    -Dsonar.sources=. \
+                    -Dsonar.java.binaries=target -X'''
+                }
+		    }
+		}
+        stage("Quality Gate") {
+            steps {
+              timeout(time: 1, unit: 'HOURS') {
+                waitForQualityGate abortPipeline: true
+              }
+            }
+        }		
+ 	}
+ 	/*
+	post {
+        success {
+            publishHTML(
+            [allowMissing: false, 
+            alwaysLinkToLastBuild: false, 
+            keepAll: false, 
+            reportDir: './', 
+            reportFiles: "index.html", 
+            reportName: 'HTML Report', 
+            reportTitles: ''])
+        }
+    }
+    */
+}
